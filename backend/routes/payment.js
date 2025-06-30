@@ -1,9 +1,12 @@
 import express from 'express';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
-import 'dotenv/config';
+import dotenv from 'dotenv'; // <-- Add this line
 import Payment from '../models/Payment.js';
 import OrderInfo from '../models/OrderInfo.js';
+
+// Ensure environment variables are loaded before using them
+dotenv.config(); // <-- Add this line
 
 const router = express.Router();
 

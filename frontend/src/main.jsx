@@ -9,5 +9,5 @@ createRoot(document.getElementById('root')).render(
     <div className="dark">
       <App />
     </div>
-  </StrictMode>,
+  </StrictMode>
 )
