@@ -22,14 +22,15 @@ app.use(express.json());
 app.get('/', (req, res) => {
     res.send('Razorpay Payment Gateway Using React And Node Js')
 });
-app.use('/api/payment', payment);
 
 app.get('/api/test', (req, res) => {
   res.send('API is working ✅');
 });
 
+// Make sure these lines are present BEFORE MongoDB connection and server listen
 app.use('/api/auth', authRoutes);
 app.use('/api/newsletter', newsletterRoutes);
+app.use('/api/payment', payment);
 app.use('/api/contact', contactRoutes);
 
 // Connect MongoDB and start server
