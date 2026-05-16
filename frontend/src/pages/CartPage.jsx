@@ -46,27 +46,38 @@ export default function CartPage() {
     if (cart.length === 0) return;
     const amount = total;
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ amount }),
-      });
+      const res = await fetch(
+        `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ amount }),
+        },
+      );
       const data = await res.json();
-      handlePayment(data.data);
+      if (!res.ok || !data?.data) {
+        throw new Error(data?.message || "Order creation failed");
+      }
+      await handlePayment(data.data);
     } catch (error) {
-      toast.error("Order creation failed");
+      toast.error(error.message || "Order creation failed");
     }
   };
 
   // Add this function to handle payment
   async function handlePayment(paymentOptions) {
+    if (!paymentOptions) {
+      toast.error("Payment order was not created");
+      return;
+    }
     const loaded = await loadRazorpayScript();
     if (!loaded) {
       toast.error("Razorpay SDK failed to load. Are you online?");
       return;
     }
     const options = {
-      key: import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID,
+      key:
+        import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID,
       amount: paymentOptions.amount,
       currency: paymentOptions.currency,
       name: "Devknus",
@@ -74,93 +85,113 @@ export default function CartPage() {
       order_id: paymentOptions.id,
       handler: async (response) => {
         try {
-          const res = await fetch(`${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/verify`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_signature: response.razorpay_signature,
-            }),
-          });
+          const res = await fetch(
+            `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/verify`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              }),
+            },
+          );
           const verifyData = await res.json();
           if (verifyData.message) {
             toast.success(verifyData.message);
             setPaymentSuccess(true); // Set payment success
             // Do not clear cart yet, wait for order placement
           }
-        } catch (error) {
+        } catch {
           toast.error("Payment verification failed");
         }
       },
       modal: {
         ondismiss: async function () {
           // User closed Razorpay modal without paying
-          await fetch(`${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order-failed`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ orderId }),
-          });
+          await fetch(
+            `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order-failed`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ orderId }),
+            },
+          );
           toast.error("Payment was not completed. Order not placed.");
-        }
+        },
       },
       theme: { color: "#0D9488" },
     };
     const rzp1 = new window.Razorpay(options);
     rzp1.open();
-  };
+  }
 
   // Place order after payment
   const handlePlaceOrder = async () => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_HOST_URL}/api/order/place`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...userInfo,
-          cart,
-          total,
-        }),
-      });
+      const res = await fetch(
+        `${import.meta.env.VITE_BACKEND_HOST_URL}/api/order/place`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...userInfo,
+            cart,
+            total,
+          }),
+        },
+      );
       const data = await res.json();
       if (res.ok && data.orderId) {
         setOrderPlaced(true);
         setOrderId(data.orderId);
         toast.success("Order placed successfully!");
         // Save latest order status for navbar modal
-        localStorage.setItem("latestOrderStatus", JSON.stringify({
-          orderId: data.orderId,
-          position: data.position, // e.g. 3
-          eta: data.eta,           // e.g. 15 (minutes)
-          updatedAt: Date.now()
-        }));
+        localStorage.setItem(
+          "latestOrderStatus",
+          JSON.stringify({
+            orderId: data.orderId,
+            position: data.position, // e.g. 3
+            eta: data.eta, // e.g. 15 (minutes)
+            updatedAt: Date.now(),
+          }),
+        );
         clearCart();
       } else {
         toast.error(data.message || "Order placement failed");
       }
-    } catch (err) {
-      toast.error("Order placement failed");
+    } catch (error) {
+      toast.error(error.message || "Order placement failed");
     }
   };
 
   // Handle user info form submit
   const handleInfoSubmit = async (e) => {
     e.preventDefault();
-    if (!userInfo.name || !userInfo.email || !userInfo.phone || !userInfo.address) {
+    if (
+      !userInfo.name ||
+      !userInfo.email ||
+      !userInfo.phone ||
+      !userInfo.address
+    ) {
       toast.error("Please fill all fields");
       return;
     }
     // Send info to backend
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/userinfo`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...userInfo,
-          cart,
-          total
-        }),
-      });
+      const res = await fetch(
+        `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/userinfo`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...userInfo,
+            cart,
+            total,
+          }),
+        },
+      );
       if (!res.ok) {
         const data = await res.json();
         toast.error(data.message || "Failed to save info");
@@ -170,8 +201,8 @@ export default function CartPage() {
       toast.success("Information saved! You can now make payment.");
       // Save user info for Navbar order tracking
       localStorage.setItem("userInfo", JSON.stringify(userInfo));
-    } catch (err) {
-      toast.error("Failed to save info");
+    } catch (error) {
+      toast.error(error.message || "Failed to save info");
     }
   };
 
@@ -205,7 +236,9 @@ export default function CartPage() {
                 </div>
                 <div className="text-base mb-4 text-accent">
                   Quantity:{" "}
-                  <span className="font-semibold text-secondary">{item.quantity}</span>
+                  <span className="font-semibold text-secondary">
+                    {item.quantity}
+                  </span>
                 </div>
                 <EcomButton onClick={() => removeFromCart(item.name)}>
                   Remove
@@ -231,14 +264,18 @@ export default function CartPage() {
                   className="max-w-xl mx-auto bg-[#23232a] rounded-2xl shadow-lg border border-accent p-8 mb-10"
                   onSubmit={handleInfoSubmit}
                 >
-                  <h2 className="text-2xl font-bold mb-6 text-primary">Enter Your Information</h2>
+                  <h2 className="text-2xl font-bold mb-6 text-primary">
+                    Enter Your Information
+                  </h2>
                   <div className="mb-4">
                     <label className="block mb-1 text-accent">Name</label>
                     <input
                       type="text"
                       className="w-full px-3 py-2 rounded bg-[#18181b] border border-accent text-white"
                       value={userInfo.name}
-                      onChange={e => setUserInfo({ ...userInfo, name: e.target.value })}
+                      onChange={(e) =>
+                        setUserInfo({ ...userInfo, name: e.target.value })
+                      }
                       required
                     />
                   </div>
@@ -248,7 +285,9 @@ export default function CartPage() {
                       type="email"
                       className="w-full px-3 py-2 rounded bg-[#18181b] border border-accent text-white"
                       value={userInfo.email}
-                      onChange={e => setUserInfo({ ...userInfo, email: e.target.value })}
+                      onChange={(e) =>
+                        setUserInfo({ ...userInfo, email: e.target.value })
+                      }
                       required
                     />
                   </div>
@@ -258,7 +297,9 @@ export default function CartPage() {
                       type="tel"
                       className="w-full px-3 py-2 rounded bg-[#18181b] border border-accent text-white"
                       value={userInfo.phone}
-                      onChange={e => setUserInfo({ ...userInfo, phone: e.target.value })}
+                      onChange={(e) =>
+                        setUserInfo({ ...userInfo, phone: e.target.value })
+                      }
                       required
                     />
                   </div>
@@ -267,7 +308,9 @@ export default function CartPage() {
                     <textarea
                       className="w-full px-3 py-2 rounded bg-[#18181b] border border-accent text-white"
                       value={userInfo.address}
-                      onChange={e => setUserInfo({ ...userInfo, address: e.target.value })}
+                      onChange={(e) =>
+                        setUserInfo({ ...userInfo, address: e.target.value })
+                      }
                       required
                     />
                   </div>
@@ -304,7 +347,9 @@ export default function CartPage() {
                   </div>
                   <div className="flex flex-col gap-1 mt-2 md:mt-0">
                     <span className="text-xs text-accent/70">Date & Time</span>
-                    <span className="font-mono text-base text-white">{new Date().toLocaleString()}</span>
+                    <span className="font-mono text-base text-white">
+                      {new Date().toLocaleString()}
+                    </span>
                   </div>
                 </div>
                 {/* Products Table */}
@@ -313,21 +358,42 @@ export default function CartPage() {
                     <thead>
                       <tr className="border-b border-accent/30 text-secondary text-xs uppercase tracking-wider">
                         <th className="py-2 px-2 font-semibold">Product</th>
-                        <th className="py-2 px-2 font-semibold text-center">Qty</th>
-                        <th className="py-2 px-2 font-semibold text-right">Price</th>
-                        <th className="py-2 px-2 font-semibold text-right">Total</th>
+                        <th className="py-2 px-2 font-semibold text-center">
+                          Qty
+                        </th>
+                        <th className="py-2 px-2 font-semibold text-right">
+                          Price
+                        </th>
+                        <th className="py-2 px-2 font-semibold text-right">
+                          Total
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {cart.map((item, idx) => (
-                        <tr key={idx} className="border-b border-accent/10 hover:bg-[#18181b]/60 transition">
+                        <tr
+                          key={idx}
+                          className="border-b border-accent/10 hover:bg-[#18181b]/60 transition"
+                        >
                           <td className="py-3 px-2 flex items-center gap-3">
-                            <img src={item.img} alt={item.name} className="w-10 h-10 rounded-lg object-cover border border-accent/30" />
-                            <span className="font-semibold text-white">{item.name}</span>
+                            <img
+                              src={item.img}
+                              alt={item.name}
+                              className="w-10 h-10 rounded-lg object-cover border border-accent/30"
+                            />
+                            <span className="font-semibold text-white">
+                              {item.name}
+                            </span>
                           </td>
-                          <td className="py-3 px-2 text-center">{item.quantity}</td>
-                          <td className="py-3 px-2 text-right">₹{item.price.toLocaleString()}</td>
-                          <td className="py-3 px-2 font-bold text-primary text-right">₹{(item.price * item.quantity).toLocaleString()}</td>
+                          <td className="py-3 px-2 text-center">
+                            {item.quantity}
+                          </td>
+                          <td className="py-3 px-2 text-right">
+                            ₹{item.price.toLocaleString()}
+                          </td>
+                          <td className="py-3 px-2 font-bold text-primary text-right">
+                            ₹{(item.price * item.quantity).toLocaleString()}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -338,9 +404,7 @@ export default function CartPage() {
                   <div className="w-full max-w-xs">
                     <div className="flex justify-between py-2 border-t border-accent/20 mt-2 text-lg font-bold text-secondary">
                       <span>Total</span>
-                      <span>
-                        ₹{total.toLocaleString()}
-                      </span>
+                      <span>₹{total.toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
@@ -353,7 +417,8 @@ export default function CartPage() {
                     Print Bill
                   </EcomButton>
                   <div className="text-xs text-accent/70 mt-3 md:mt-0">
-                    Thank you for shopping with <span className="font-bold text-primary">Devknus</span>!
+                    Thank you for shopping with{" "}
+                    <span className="font-bold text-primary">Devknus</span>!
                   </div>
                 </div>
               </div>
@@ -361,12 +426,12 @@ export default function CartPage() {
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
                 <div className="text-2xl font-bold font-heading">
                   Total:{" "}
-                  <span className="text-secondary">₹{total.toLocaleString()}</span>
+                  <span className="text-secondary">
+                    ₹{total.toLocaleString()}
+                  </span>
                 </div>
                 <div className="flex gap-3">
-                  <EcomButton onClick={clearCart}>
-                    Clear Cart
-                  </EcomButton>
+                  <EcomButton onClick={clearCart}>Clear Cart</EcomButton>
                   {/* Only show payment button after info is submitted */}
                   {infoSubmitted && !paymentSuccess && (
                     <EcomButton onClick={handleCartPayment}>
@@ -385,12 +450,15 @@ export default function CartPage() {
               {orderPlaced && orderId && (
                 <div className="mt-6 flex flex-col items-center gap-4">
                   <div className="text-center text-lg text-primary font-bold">
-                    Order placed! Your Order ID: <span className="font-mono">{orderId}</span>
+                    Order placed! Your Order ID:{" "}
+                    <span className="font-mono">{orderId}</span>
                   </div>
                   <EcomButton
                     onClick={() => {
                       // Navigate to order tracking page with orderId and email as query params
-                      navigate(`/order-tracking?orderId=${orderId}&email=${encodeURIComponent(userInfo.email)}`);
+                      navigate(
+                        `/order-tracking?orderId=${orderId}&email=${encodeURIComponent(userInfo.email)}`,
+                      );
                     }}
                     className="px-6 py-2 rounded-lg font-semibold bg-gradient-to-r from-primary to-secondary text-white"
                   >
