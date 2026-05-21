@@ -335,4 +335,76 @@ router.post("/order-success", async (req, res) => {
   }
 });
 
+// ROUTE 6: Get latest order by email
+// GET /api/payment/latest-order
+router.get("/latest-order", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({
+        message: "Email is required",
+        success: false,
+      });
+    }
+
+    const order = await OrderInfo.findOne({ email }).sort({ createdAt: -1 });
+
+    if (!order) {
+      return res.status(404).json({
+        message: "No orders found",
+        success: false,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      order,
+    });
+  } catch (error) {
+    console.error("❌ Latest order fetch error:", error);
+    return res.status(500).json({
+      message: "Failed to fetch latest order",
+      success: false,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+});
+
+// ROUTE 7: Get all orders by email
+// GET /api/payment/all-orders
+router.get("/all-orders", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({
+        message: "Email is required",
+        success: false,
+      });
+    }
+
+    const orders = await OrderInfo.find({ email }).sort({ createdAt: -1 });
+
+    if (!orders || orders.length === 0) {
+      return res.status(404).json({
+        message: "No orders found",
+        success: false,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      orders,
+    });
+  } catch (error) {
+    console.error("❌ All orders fetch error:", error);
+    return res.status(500).json({
+      message: "Failed to fetch orders",
+      success: false,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+});
+
 export default router;
