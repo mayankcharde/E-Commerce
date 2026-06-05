@@ -20,6 +20,7 @@ const corsOptions = {
     "http://localhost:5173", // Vite dev server
     "https://localhost:3000",
     "https://localhost:5173",
+    "https://e-commerce-ten-ruddy-33.vercel.app/",
     process.env.FRONTEND_URL || "", // Production Netlify URL
   ].filter(Boolean),
   credentials: true,
