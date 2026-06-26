@@ -45,6 +45,8 @@ export default function CartPage() {
   const handleCartPayment = async () => {
     if (cart.length === 0) return;
     const amount = total;
+    console.log("📝 [Frontend] Initiating order creation request. Amount (INR):", amount);
+    console.log("📝 [Frontend] Request URL:", `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order`);
     try {
       const res = await fetch(
         `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order`,
@@ -55,11 +57,15 @@ export default function CartPage() {
         },
       );
       const data = await res.json();
+      console.log("📝 [Frontend] Backend order response status:", res.status);
+      console.log("📝 [Frontend] Backend order response data:", data);
+
       if (!res.ok || !data?.data) {
         throw new Error(data?.message || "Order creation failed");
       }
       await handlePayment(data.data);
     } catch (error) {
+      console.error("❌ [Frontend] Order creation error:", error);
       toast.error(error.message || "Order creation failed");
     }
   };
@@ -67,24 +73,30 @@ export default function CartPage() {
   // Add this function to handle payment
   async function handlePayment(paymentOptions) {
     if (!paymentOptions) {
+      console.error("❌ [Frontend] Cannot initiate Razorpay: paymentOptions is undefined");
       toast.error("Payment order was not created");
       return;
     }
     const loaded = await loadRazorpayScript();
     if (!loaded) {
+      console.error("❌ [Frontend] Razorpay script could not be loaded");
       toast.error("Razorpay SDK failed to load. Are you online?");
       return;
     }
+
+    const rzpKey = import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID;
+    
     const options = {
-      key:
-        import.meta.env.VITE_RAZORPAY_KEY_ID || import.meta.env.RAZORPAY_KEY_ID,
+      key: rzpKey,
       amount: paymentOptions.amount,
       currency: paymentOptions.currency,
       name: "Devknus",
       description: "Cart Payment",
       order_id: paymentOptions.id,
       handler: async (response) => {
+        console.log("✅ [Frontend] Razorpay standard checkout success callback response:", response);
         try {
+          console.log("📝 [Frontend] Initiating backend payment verification request...");
           const res = await fetch(
             `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/verify`,
             {
@@ -98,31 +110,59 @@ export default function CartPage() {
             },
           );
           const verifyData = await res.json();
-          if (verifyData.message) {
-            toast.success(verifyData.message);
+          console.log("📝 [Frontend] Backend verification response status:", res.status);
+          console.log("📝 [Frontend] Backend verification response data:", verifyData);
+
+          if (res.ok && (verifyData.success || verifyData.message)) {
+            toast.success(verifyData.message || "Payment verified successfully");
             setPaymentSuccess(true); // Set payment success
-            // Do not clear cart yet, wait for order placement
+          } else {
+            throw new Error(verifyData.message || "Payment verification failed");
           }
-        } catch {
+        } catch (err) {
+          console.error("❌ [Frontend] Payment verification failed:", err);
           toast.error("Payment verification failed");
         }
       },
       modal: {
         ondismiss: async function () {
-          // User closed Razorpay modal without paying
-          await fetch(
-            `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order-failed`,
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ orderId }),
-            },
-          );
+          console.warn("⚠️ [Frontend] Razorpay checkout dismissed by user. orderId:", orderId);
+          try {
+            if (orderId) {
+              await fetch(
+                `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order-failed`,
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ orderId }),
+                },
+              );
+            }
+          } catch (dismissErr) {
+            console.error("❌ [Frontend] Failed to send order-failed status to backend:", dismissErr);
+          }
           toast.error("Payment was not completed. Order not placed.");
         },
       },
+      prefill: {
+        name: userInfo.name,
+        email: userInfo.email,
+        contact: userInfo.phone
+      },
       theme: { color: "#0D9488" },
     };
+
+    console.log("🚀 [Frontend] Opening Razorpay Checkout options structure:", {
+      key: options.key ? `Loaded (${options.key.substring(0, 10)}...)` : "MISSING",
+      amount: options.amount,
+      currency: options.currency,
+      name: options.name,
+      description: options.description,
+      order_id: options.order_id,
+      prefill: options.prefill,
+      theme: options.theme
+    });
+
     const rzp1 = new window.Razorpay(options);
     rzp1.open();
   }
@@ -130,30 +170,29 @@ export default function CartPage() {
   // Place order after payment
   const handlePlaceOrder = async () => {
     try {
+      console.log("📝 [Frontend] Placing order. Sending order ID to success endpoint:", orderId);
       const res = await fetch(
-        `${import.meta.env.VITE_BACKEND_HOST_URL}/api/order/place`,
+        `${import.meta.env.VITE_BACKEND_HOST_URL}/api/payment/order-success`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            ...userInfo,
-            cart,
-            total,
-          }),
+          body: JSON.stringify({ orderId }),
         },
       );
       const data = await res.json();
-      if (res.ok && data.orderId) {
+      console.log("📝 [Frontend] Order success response status:", res.status);
+      console.log("📝 [Frontend] Order success response data:", data);
+
+      if (res.ok && data.order?._id) {
         setOrderPlaced(true);
-        setOrderId(data.orderId);
         toast.success("Order placed successfully!");
         // Save latest order status for navbar modal
         localStorage.setItem(
           "latestOrderStatus",
           JSON.stringify({
-            orderId: data.orderId,
-            position: data.position, // e.g. 3
-            eta: data.eta, // e.g. 15 (minutes)
+            orderId: data.order._id,
+            position: 3,
+            eta: 15,
             updatedAt: Date.now(),
           }),
         );
@@ -162,6 +201,7 @@ export default function CartPage() {
         toast.error(data.message || "Order placement failed");
       }
     } catch (error) {
+      console.error("❌ [Frontend] Order placement error:", error);
       toast.error(error.message || "Order placement failed");
     }
   };
@@ -178,6 +218,8 @@ export default function CartPage() {
       toast.error("Please fill all fields");
       return;
     }
+    
+    console.log("📝 [Frontend] Submitting user info to backend:", userInfo);
     // Send info to backend
     try {
       const res = await fetch(
@@ -192,16 +234,23 @@ export default function CartPage() {
           }),
         },
       );
+      const data = await res.json();
+      console.log("📝 [Frontend] Userinfo response status:", res.status);
+      console.log("📝 [Frontend] Userinfo response data:", data);
+
       if (!res.ok) {
-        const data = await res.json();
         toast.error(data.message || "Failed to save info");
         return;
       }
+      
+      // Save orderId in state so that it is available when ordering or dismissing payment
+      setOrderId(data.orderId);
       setInfoSubmitted(true);
       toast.success("Information saved! You can now make payment.");
       // Save user info for Navbar order tracking
       localStorage.setItem("userInfo", JSON.stringify(userInfo));
     } catch (error) {
+      console.error("❌ [Frontend] User info submit error:", error);
       toast.error(error.message || "Failed to save info");
     }
   };

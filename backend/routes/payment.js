@@ -10,14 +10,28 @@ dotenv.config();
 
 const router = express.Router();
 
-// Initialize Razorpay with error checking
+// Initialize Razorpay with error checking and env mismatch detection
 const initializeRazorpay = () => {
   const key_id = process.env.RAZORPAY_KEY_ID;
-  const key_secret = process.env.RAZORPAY_SECRET;
+  const key_secret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET;
+
+  console.log("🔍 [Razorpay Init] checking environment variables...");
+  console.log("🔍 [Razorpay Init] process.env.RAZORPAY_KEY_ID:", key_id ? `Loaded (${key_id.substring(0, 10)}...)` : "MISSING");
+  console.log("🔍 [Razorpay Init] process.env.RAZORPAY_SECRET:", process.env.RAZORPAY_SECRET ? "Loaded" : "MISSING");
+  console.log("🔍 [Razorpay Init] process.env.RAZORPAY_KEY_SECRET:", process.env.RAZORPAY_KEY_SECRET ? "Loaded" : "MISSING");
 
   if (!key_id || !key_secret) {
-    console.error("❌ RAZORPAY_KEY_ID or RAZORPAY_SECRET not configured");
+    console.error("❌ [Razorpay Init Error] RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET/RAZORPAY_SECRET not configured");
     throw new Error("Razorpay credentials not configured");
+  }
+
+  // Detect Live/Test mismatch
+  const isKeyLive = key_id.startsWith("rzp_live_");
+  const isSecretLive = key_secret.startsWith("rzp_live_") || (process.env.RAZORPAY_SECRET && process.env.RAZORPAY_SECRET.startsWith("rzp_live_"));
+  const isKeyTest = key_id.startsWith("rzp_test_");
+  
+  if (isKeyLive && !key_id.startsWith("rzp_live_")) {
+    console.warn("⚠️ [Razorpay Init Warning] Key ID does not match expected format.");
   }
 
   return new Razorpay({
@@ -30,8 +44,8 @@ let razorpayInstance;
 try {
   razorpayInstance = initializeRazorpay();
   console.log(
-    "✅ Razorpay initialized with key:",
-    process.env.RAZORPAY_KEY_ID?.substring(0, 20) + "...",
+    "✅ Razorpay initialized successfully with key prefix:",
+    process.env.RAZORPAY_KEY_ID?.substring(0, 12)
   );
 } catch (err) {
   console.error("❌ Razorpay initialization error:", err.message);
@@ -42,10 +56,14 @@ try {
 router.post("/order", async (req, res) => {
   const { amount } = req.body;
 
-  console.log("📝 Order creation request:", { amount });
+  console.log("📝 Incoming Request to /api/payment/order. Body:", req.body);
+  console.log("Key Loaded:", !!process.env.RAZORPAY_KEY_ID);
+  console.log("Secret Loaded:", !!(process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET));
+  console.log("Amount:", amount);
 
   try {
     if (!amount) {
+      console.warn("⚠️ Amount is missing from request body");
       return res.status(400).json({
         message: "Amount is required",
         success: false,
@@ -54,6 +72,7 @@ router.post("/order", async (req, res) => {
 
     const amountInRupees = Number(amount);
     if (!Number.isFinite(amountInRupees) || amountInRupees <= 0) {
+      console.warn("⚠️ Invalid amount provided:", amount);
       return res.status(400).json({
         message: "Invalid amount. Must be a positive number",
         success: false,
@@ -61,6 +80,7 @@ router.post("/order", async (req, res) => {
     }
 
     if (!razorpayInstance) {
+      console.error("❌ Cannot create order: Razorpay instance is not initialized");
       throw new Error("Razorpay not initialized");
     }
 
@@ -70,11 +90,11 @@ router.post("/order", async (req, res) => {
       receipt: `receipt_${crypto.randomBytes(10).toString("hex")}`,
     };
 
-    console.log("🔍 Creating order with options:", options);
+    console.log("🔍 Creating Razorpay order with options:", options);
 
     const order = await razorpayInstance.orders.create(options);
 
-    console.log("✅ Order created successfully:", order);
+    console.log("✅ Razorpay Order created successfully:", order);
 
     return res.status(200).json({
       data: order,
@@ -82,18 +102,14 @@ router.post("/order", async (req, res) => {
       message: "Order created successfully",
     });
   } catch (error) {
-    const errorMessage =
-      error?.error?.description ||
-      error?.description ||
-      error?.message ||
-      "Internal Server Error";
-
-    console.error("❌ Order creation error:", error);
+    console.error("❌ Exception caught in /api/payment/order:", error);
 
     return res.status(500).json({
-      message: errorMessage,
       success: false,
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error?.message || "Internal Server Error during order creation",
+      error: error?.message,
+      stack: error?.stack,
+      rawError: error
     });
   }
 });
@@ -104,13 +120,15 @@ router.post("/verify", async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
     req.body;
 
-  console.log("🔐 Payment verification request:", {
+  console.log("🔐 Incoming Request to /api/payment/verify. Body:", {
     razorpay_order_id,
     razorpay_payment_id,
+    razorpay_signature: razorpay_signature ? "Present" : "Missing",
   });
 
   try {
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      console.warn("⚠️ Missing payment verification data in request");
       return res.status(400).json({
         message: "Missing payment verification data",
         success: false,
@@ -118,14 +136,20 @@ router.post("/verify", async (req, res) => {
     }
 
     const sign = razorpay_order_id + "|" + razorpay_payment_id;
+    const secret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET;
+    
+    if (!secret) {
+      throw new Error("Razorpay secret key not configured on backend");
+    }
+
     const expectedSign = crypto
-      .createHmac("sha256", process.env.RAZORPAY_SECRET)
+      .createHmac("sha256", secret)
       .update(sign.toString())
       .digest("hex");
 
     const isAuthentic = expectedSign === razorpay_signature;
 
-    console.log("🔍 Signature verification:", { isAuthentic });
+    console.log("🔍 Signature verification check:", { isAuthentic, expectedSign: expectedSign.substring(0, 10) + "...", razorpay_signature: razorpay_signature.substring(0, 10) + "..." });
 
     if (isAuthentic) {
       // Save payment record
@@ -136,7 +160,7 @@ router.post("/verify", async (req, res) => {
       });
       await payment.save();
 
-      console.log("✅ Payment saved successfully:", payment._id);
+      console.log("✅ Payment record saved in MongoDB:", payment._id);
 
       // Update order status to 'placed'
       const updatedOrder = await OrderInfo.findOneAndUpdate(
@@ -145,7 +169,7 @@ router.post("/verify", async (req, res) => {
         { new: true },
       );
 
-      console.log("✅ Order status updated:", updatedOrder);
+      console.log("✅ Order status updated in MongoDB:", updatedOrder);
 
       return res.status(200).json({
         message: "Payment verified successfully",
@@ -163,11 +187,12 @@ router.post("/verify", async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("❌ Payment verification error:", error);
+    console.error("❌ Exception caught in /api/payment/verify:", error);
     return res.status(500).json({
-      message: "Payment verification error",
       success: false,
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error?.message || "Internal Server Error during payment verification",
+      error: error?.message,
+      stack: error?.stack,
     });
   }
 });
@@ -178,15 +203,17 @@ router.post("/userinfo", async (req, res) => {
   try {
     const { name, email, phone, address, cart, total } = req.body;
 
-    console.log("📝 User info received:", {
+    console.log("📝 Incoming Request to /api/payment/userinfo. Body:", {
       name,
       email,
       phone,
       address,
       total,
+      cartLength: cart ? cart.length : 0,
     });
 
     if (!name || !email || !phone || !address || !cart || total === undefined) {
+      console.warn("⚠️ Missing fields in user info request");
       return res.status(400).json({
         message:
           "All fields are required (name, email, phone, address, cart, total)",
@@ -197,6 +224,7 @@ router.post("/userinfo", async (req, res) => {
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+      console.warn("⚠️ Invalid email format:", email);
       return res.status(400).json({
         message: "Invalid email format",
         success: false,
@@ -206,6 +234,7 @@ router.post("/userinfo", async (req, res) => {
     // Validate phone (basic check for Indian phone)
     const phoneRegex = /^[0-9]{10}$/;
     if (!phoneRegex.test(phone.replace(/\D/g, ""))) {
+      console.warn("⚠️ Invalid phone number format:", phone);
       return res.status(400).json({
         message: "Invalid phone number",
         success: false,
@@ -225,7 +254,7 @@ router.post("/userinfo", async (req, res) => {
 
     const savedOrder = await orderInfo.save();
 
-    console.log("✅ User info saved:", savedOrder._id);
+    console.log("✅ OrderInfo (pending) saved in MongoDB ID:", savedOrder._id);
 
     return res.status(201).json({
       message: "User info saved successfully",
@@ -234,11 +263,12 @@ router.post("/userinfo", async (req, res) => {
       data: savedOrder,
     });
   } catch (error) {
-    console.error("❌ User info save error:", error);
+    console.error("❌ Exception caught in /api/payment/userinfo:", error);
     return res.status(500).json({
-      message: "Failed to save user information",
       success: false,
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error?.message || "Internal Server Error during user info save",
+      error: error?.message,
+      stack: error?.stack,
     });
   }
 });
@@ -248,8 +278,10 @@ router.post("/userinfo", async (req, res) => {
 router.post("/order-failed", async (req, res) => {
   try {
     const { orderId } = req.body;
+    console.log("📝 Incoming Request to /api/payment/order-failed. Body:", req.body);
 
     if (!orderId) {
+      console.warn("⚠️ Missing orderId in order-failed request");
       return res.status(400).json({
         message: "Order ID is required",
         success: false,
@@ -266,13 +298,14 @@ router.post("/order-failed", async (req, res) => {
     );
 
     if (!order) {
+      console.warn("⚠️ Order not found for ID:", orderId);
       return res.status(404).json({
         message: "Order not found",
         success: false,
       });
     }
 
-    console.log("✅ Order marked as failed:", orderId);
+    console.log("✅ Order marked as failed in MongoDB:", orderId);
 
     return res.status(200).json({
       message: "Order marked as failed",
@@ -280,11 +313,12 @@ router.post("/order-failed", async (req, res) => {
       order,
     });
   } catch (error) {
-    console.error("❌ Order failure update error:", error);
+    console.error("❌ Exception caught in /api/payment/order-failed:", error);
     return res.status(500).json({
-      message: "Failed to update order status",
       success: false,
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error?.message || "Internal Server Error during updating failed status",
+      error: error?.message,
+      stack: error?.stack,
     });
   }
 });
@@ -294,8 +328,10 @@ router.post("/order-failed", async (req, res) => {
 router.post("/order-success", async (req, res) => {
   try {
     const { orderId } = req.body;
+    console.log("📝 Incoming Request to /api/payment/order-success. Body:", req.body);
 
     if (!orderId) {
+      console.warn("⚠️ Missing orderId in order-success request");
       return res.status(400).json({
         message: "Order ID is required",
         success: false,
@@ -312,13 +348,14 @@ router.post("/order-success", async (req, res) => {
     );
 
     if (!order) {
+      console.warn("⚠️ Order not found for ID:", orderId);
       return res.status(404).json({
         message: "Order not found",
         success: false,
       });
     }
 
-    console.log("✅ Order marked as placed:", orderId);
+    console.log("✅ Order marked as placed in MongoDB:", orderId);
 
     return res.status(200).json({
       message: "Order placed successfully",
@@ -326,11 +363,12 @@ router.post("/order-success", async (req, res) => {
       order,
     });
   } catch (error) {
-    console.error("❌ Order success update error:", error);
+    console.error("❌ Exception caught in /api/payment/order-success:", error);
     return res.status(500).json({
-      message: "Failed to update order status",
       success: false,
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error?.message || "Internal Server Error during updating placed status",
+      error: error?.message,
+      stack: error?.stack,
     });
   }
 });
@@ -340,8 +378,10 @@ router.post("/order-success", async (req, res) => {
 router.get("/latest-order", async (req, res) => {
   try {
     const { email } = req.query;
+    console.log("📝 Incoming GET Request to /api/payment/latest-order. Query:", req.query);
 
     if (!email) {
+      console.warn("⚠️ Missing email in latest-order query");
       return res.status(400).json({
         message: "Email is required",
         success: false,
@@ -351,6 +391,7 @@ router.get("/latest-order", async (req, res) => {
     const order = await OrderInfo.findOne({ email }).sort({ createdAt: -1 });
 
     if (!order) {
+      console.info("ℹ️ No orders found for email:", email);
       return res.status(404).json({
         message: "No orders found",
         success: false,
@@ -362,11 +403,12 @@ router.get("/latest-order", async (req, res) => {
       order,
     });
   } catch (error) {
-    console.error("❌ Latest order fetch error:", error);
+    console.error("❌ Exception caught in /api/payment/latest-order:", error);
     return res.status(500).json({
-      message: "Failed to fetch latest order",
       success: false,
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error?.message || "Internal Server Error during latest order query",
+      error: error?.message,
+      stack: error?.stack,
     });
   }
 });
@@ -376,8 +418,10 @@ router.get("/latest-order", async (req, res) => {
 router.get("/all-orders", async (req, res) => {
   try {
     const { email } = req.query;
+    console.log("📝 Incoming GET Request to /api/payment/all-orders. Query:", req.query);
 
     if (!email) {
+      console.warn("⚠️ Missing email in all-orders query");
       return res.status(400).json({
         message: "Email is required",
         success: false,
@@ -387,6 +431,7 @@ router.get("/all-orders", async (req, res) => {
     const orders = await OrderInfo.find({ email }).sort({ createdAt: -1 });
 
     if (!orders || orders.length === 0) {
+      console.info("ℹ️ No orders found for email:", email);
       return res.status(404).json({
         message: "No orders found",
         success: false,
@@ -398,11 +443,12 @@ router.get("/all-orders", async (req, res) => {
       orders,
     });
   } catch (error) {
-    console.error("❌ All orders fetch error:", error);
+    console.error("❌ Exception caught in /api/payment/all-orders:", error);
     return res.status(500).json({
-      message: "Failed to fetch orders",
       success: false,
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error?.message || "Internal Server Error during all orders query",
+      error: error?.message,
+      stack: error?.stack,
     });
   }
 });
