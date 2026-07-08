@@ -14,6 +14,8 @@ A modern full-stack E-Commerce platform built using the <strong>MERN Stack</stro
 
 ---
 
+Live Link : https://e-commerce-ten-ruddy-33.vercel.app/
+
 # 📖 Overview
 
 This project is a full-featured E-Commerce web application developed using the **MERN Stack (MongoDB, Express.js, React, Node.js)**. It enables users to browse products, add items to their cart, securely place orders, and complete payments using Razorpay.
